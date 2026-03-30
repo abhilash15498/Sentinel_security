@@ -1,0 +1,48 @@
+# ============================================================
+# SENTINEL Security System - Requirements
+# Python 3.14+ Compatible | No C++ Compiler Needed
+# ============================================================
+
+# GUI Framework
+customtkinter>=5.2.2
+Pillow>=10.3.0
+
+# Computer Vision (no contrib, no dlib)
+opencv-python>=4.9.0.80
+
+# Face Recognition (pure Python / ONNX runtime)
+deepface>=0.0.93
+tf-keras>=2.16.0
+
+# ONNX Runtime (for InsightFace backend & DeepFace)
+onnxruntime>=1.18.0
+
+# System Monitoring
+psutil>=5.9.8
+pyudev>=0.24.1; sys_platform == "linux"
+pywinusb>=0.4.2; sys_platform == "win32"
+
+# Alerts & Notifications
+plyer>=2.1.0
+pyttsx3>=2.90
+
+# Email alerts
+secure-smtplib>=0.1.1
+
+# Telegram alerts (optional)
+python-telegram-bot>=21.3
+
+# Logging & Utilities
+colorlog>=6.8.2
+python-dotenv>=1.0.1
+numpy>=1.26.4
+requests>=2.32.2
+
+# Audio alarm
+pygame>=2.5.2
+
+# Screenshot
+mss>=9.0.1
+
+# Keyboard/mouse activity monitoring
+pynput>=1.7.7

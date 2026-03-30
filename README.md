@@ -71,25 +71,6 @@ cp .env.example .env
 ```bash
 python main.py
 ```
-
----
-
-## 📸 Screenshots
-
-### Dashboard
-![Dashboard](assets/dashboard.png)
-*Main dashboard with live camera feed and system status*
-
-### Face Enrollment
-![Enrollment](assets/enrollment.png)
-*Enroll authorized users via camera or file upload*
-
-### Alerts
-![Alerts](assets/alerts.png)
-*Multi-channel notifications with screenshot evidence*
-
----
-
 ## 🎯 How It Works
 
 ### Face Recognition Pipeline

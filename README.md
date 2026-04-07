@@ -376,4 +376,4 @@ If you find this project useful, please consider giving it a star! ⭐
 
 ---
 
-**Built with ❤️ for security and privacy**
+**Built with 🔥⚡ for security and privacy**

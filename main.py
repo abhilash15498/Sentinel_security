@@ -136,18 +136,13 @@ class SentinelApp:
             return
 
         def _burst():
-            import cv2
             import time
-            cap = cv2.VideoCapture(0)
-            
-            # Warm up camera sensor
-            for _ in range(10): cap.read()
-
             captured = 0
-            # Burst capture 15 frames over ~1.5 seconds
-            for _ in range(30):
-                ret, frame = cap.read()
-                if not ret or frame is None:
+            # Burst capture 15 frames over ~3 seconds
+            for _ in range(60):
+                frame = self.camera.get_latest_frame()
+                if frame is None:
+                    time.sleep(0.05)
                     continue
 
                 faces = self.camera._detector.detect(frame)
@@ -165,8 +160,6 @@ class SentinelApp:
                         if captured >= 15:
                             break
                 time.sleep(0.05)
-                
-            cap.release()
 
             if captured > 0:
                 # Reload the compiled embeddings directory once at the very end

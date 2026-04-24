@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+venv/
+env/
+
+# Project Specific
+logs/
+models/known_faces/*
+!models/known_faces/.gitkeep
+models/deepface_weights/
+
+# IDEs
+.vscode/
+.idea/
+*.swp

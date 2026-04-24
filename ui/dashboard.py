@@ -13,6 +13,8 @@ import queue
 from pathlib import Path
 from datetime import datetime
 from typing import TYPE_CHECKING
+from utils.config import Config
+from utils.logger import get_logger, event_logger
 
 if TYPE_CHECKING:
     from main import SentinelApp
@@ -167,6 +169,7 @@ class SentinelDashboard(ctk.CTk):
         self._app = app_controller
         self._setup_window()
         self._build_ui()
+        self._last_stats_update = 0
         self._start_tick()
 
     # ─── Window Setup ─────────────────────────────────────────
@@ -560,16 +563,24 @@ class SentinelDashboard(ctk.CTk):
             thresh_row, text="Face Confidence Threshold",
             font=("Courier New", 12),
         ).pack(side="left", padx=14, pady=10)
-        self._thresh_var = ctk.DoubleVar(value=0.75)
+        
+        # Load from Config
+        current_thresh = Config.FACE_CONFIDENCE_THRESHOLD
+        self._thresh_var = ctk.DoubleVar(value=current_thresh)
         self._thresh_lbl = ctk.CTkLabel(
-            thresh_row, text="75%",
+            thresh_row, text=f"{int(current_thresh*100)}%",
             font=("Courier New", 11), text_color=ACCENT,
         )
         self._thresh_lbl.pack(side="right", padx=8)
+        
+        def _on_thresh_change(v):
+            self._thresh_lbl.configure(text=f"{int(v*100)}%")
+            Config.FACE_CONFIDENCE_THRESHOLD = float(v)
+            
         ctk.CTkSlider(
             thresh_row, from_=0.4, to=0.99,
             variable=self._thresh_var,
-            command=lambda v: self._thresh_lbl.configure(text=f"{int(v*100)}%"),
+            command=_on_thresh_change,
             button_color=ACCENT, progress_color=ACCENT,
         ).pack(side="right", padx=8, pady=8)
 
@@ -630,9 +641,13 @@ class SentinelDashboard(ctk.CTk):
             )
             # Refresh camera
             self.camera_panel.refresh()
-            # Update stats
-            if self._app:
-                self._update_stats()
+            
+            # Update stats less frequently (every 2 seconds) to prevent GUI freezing
+            now = time.time()
+            if now - self._last_stats_update >= 2.0:
+                self._last_stats_update = now
+                if self._app:
+                    self._update_stats()
         except Exception:
             pass
         finally:

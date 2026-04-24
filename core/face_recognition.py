@@ -71,7 +71,7 @@ class FaceRecognizer:
 
     def __init__(self) -> None:
         self._known_faces_dir = Config.KNOWN_FACES_DIR
-        self._known_embeddings: list[dict] = []  # [{name, embedding, path}]
+        self._known_embeddings: list[dict] = []  # [{name, embedding}]
         self._deepface_available = False
         self._mode = Config.FACE_RECOGNITION_MODE
         self._init_recognizer()
@@ -105,20 +105,45 @@ class FaceRecognizer:
         return True
 
     def load_known_faces(self) -> None:
-        """Scan known_faces directory and cache embeddings."""
+        """Scan known_faces directory and cache embeddings AND histograms as backup."""
         self._known_embeddings = []
+        logger.info("Loading face database...")
+        
         for person_dir in self._known_faces_dir.iterdir():
-            if person_dir.is_dir():
-                name = person_dir.name
-                for img_path in person_dir.glob("*.jpg"):
-                    self._known_embeddings.append({
-                        "name": name,
-                        "path": img_path,
-                    })
-        logger.info(
-            f"Loaded {len(self._known_embeddings)} known face samples "
-            f"for {len(set(e['name'] for e in self._known_embeddings))} people."
-        )
+            if not person_dir.is_dir(): continue
+            name = person_dir.name
+            for img_path in person_dir.glob("*.jpg"):
+                entry = {"name": name, "path": img_path}
+                
+                # Always cache histogram as a bulletproof backup
+                try:
+                    img = cv2.imread(str(img_path))
+                    if img is not None:
+                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                        hist = cv2.equalizeHist(cv2.resize(gray, (100, 100)))
+                        entry["hist"] = cv2.calcHist([hist], [0], None, [256], [0, 256])
+                        cv2.normalize(entry["hist"], entry["hist"])
+                except Exception:
+                    pass
+
+                # Try to cache DeepFace embedding if available
+                if self._deepface_available and self._mode == "deepface":
+                    try:
+                        from deepface import DeepFace
+                        objs = DeepFace.represent(
+                            img_path=str(img_path),
+                            model_name="Facenet512",
+                            detector_backend="skip",
+                            enforce_detection=False,
+                        )
+                        if objs:
+                            entry["embedding"] = objs[0]["embedding"]
+                    except Exception:
+                        pass # Will use histogram fallback during recognize()
+                
+                self._known_embeddings.append(entry)
+                
+        logger.info(f"Loaded {len(self._known_embeddings)} face samples.")
 
     # ─── Recognition ──────────────────────────────────────────
 
@@ -138,57 +163,66 @@ class FaceRecognizer:
     def _recognize_deepface(self, face_crop: np.ndarray) -> tuple[str, float]:
         try:
             from deepface import DeepFace
-            best_name = "UNKNOWN"
-            best_dist = float("inf")
+            objs = DeepFace.represent(
+                img_path=face_crop,
+                model_name="Facenet512",
+                detector_backend="skip",
+                enforce_detection=False,
+            )
+            if not objs: return "UNKNOWN", 0.0
+            
+            probe_vec = np.array(objs[0]["embedding"])
+            best_name, best_dist = "UNKNOWN", float("inf")
+            max_dist = 1.0 - Config.FACE_CONFIDENCE_THRESHOLD
 
             for entry in self._known_embeddings:
-                try:
-                    result = DeepFace.verify(
-                        img1_path=face_crop,
-                        img2_path=str(entry["path"]),
-                        model_name="Facenet512",
-                        detector_backend="skip",
-                        enforce_detection=False,
-                        silent=True,
-                    )
-                    if result["verified"] and result["distance"] < best_dist:
-                        best_dist = result["distance"]
-                        best_name = entry["name"]
-                except Exception:
-                    continue
+                if "embedding" not in entry: continue
+                target_vec = np.array(entry["embedding"])
+                
+                # Cosine distance
+                dist = 1.0 - (np.dot(probe_vec, target_vec) / (np.linalg.norm(probe_vec) * np.linalg.norm(target_vec)))
+                
+                if dist < max_dist and dist < best_dist:
+                    best_dist = dist
+                    best_name = entry["name"]
 
             confidence = max(0.0, 1.0 - best_dist) if best_name != "UNKNOWN" else 0.0
             return best_name, round(confidence, 3)
-
         except Exception as e:
-            logger.warning(f"DeepFace recognition error: {e}")
-            return "UNKNOWN", 0.0
+            logger.warning(f"DeepFace failed: {e}. Using histogram fallback.")
+            return self._recognize_histogram(face_crop)
 
     def _recognize_histogram(self, face_crop: np.ndarray) -> tuple[str, float]:
-        """Simple histogram-based fallback recognizer."""
+        """Improved histogram-based recognizer with lighting normalization."""
         try:
-            probe = cv2.resize(face_crop, (100, 100))
-            probe_hist = cv2.calcHist([probe], [0, 1, 2], None,
-                                      [8, 8, 8], [0, 256, 0, 256, 0, 256])
+            # Normalize lighting using Histogram Equalization
+            gray_probe = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
+            equalized_probe = cv2.equalizeHist(cv2.resize(gray_probe, (100, 100)))
+            
+            probe_hist = cv2.calcHist([equalized_probe], [0], None, [256], [0, 256])
             cv2.normalize(probe_hist, probe_hist)
 
             best_name = "UNKNOWN"
             best_score = 0.0
 
             for entry in self._known_embeddings:
-                img = cv2.imread(str(entry["path"]))
-                if img is None:
-                    continue
-                img = cv2.resize(img, (100, 100))
-                hist = cv2.calcHist([img], [0, 1, 2], None,
-                                    [8, 8, 8], [0, 256, 0, 256, 0, 256])
-                cv2.normalize(hist, hist)
-                score = cv2.compareHist(probe_hist, hist, cv2.HISTCMP_CORREL)
+                # Use cached histogram if available
+                if "hist" in entry:
+                    sample_hist = entry["hist"]
+                else:
+                    img = cv2.imread(str(entry["path"]))
+                    if img is None: continue
+                    gray_sample = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                    equalized_sample = cv2.equalizeHist(cv2.resize(gray_sample, (100, 100)))
+                    sample_hist = cv2.calcHist([equalized_sample], [0], None, [256], [0, 256])
+                    cv2.normalize(sample_hist, sample_hist)
+                
+                score = cv2.compareHist(probe_hist, sample_hist, cv2.HISTCMP_CORREL)
                 if score > best_score:
                     best_score = score
                     best_name = entry["name"]
 
-            if best_score < 0.6:
+            if best_score < 0.75:
                 return "UNKNOWN", 0.0
             return best_name, round(best_score, 3)
 
@@ -225,10 +259,18 @@ class CameraMonitor:
         self._recognizing_lock = threading.Lock()
         self._is_recognizing = False
         self._last_face_info = ("UNKNOWN", 0.0)
+        self._unknown_start_time: float = 0.0
+        self._last_log_time: dict[str, float] = {}  # Per-person log throttling
+        self._latest_raw_frame: np.ndarray | None = None
+        self._frame_lock = threading.Lock()
 
     @property
     def recognizer(self) -> FaceRecognizer:
         return self._recognizer
+
+    def get_latest_frame(self) -> np.ndarray | None:
+        with self._frame_lock:
+            return self._latest_raw_frame.copy() if self._latest_raw_frame is not None else None
 
     def start(self, camera_index: int = 0) -> bool:
         if self._running:
@@ -262,14 +304,25 @@ class CameraMonitor:
                 
             now = time.time()
             if name == "UNKNOWN":
-                if now - self._last_alert_time >= Config.ALERT_COOLDOWN_SECONDS:
-                    self._last_alert_time = now
-                    if self._on_unknown:
-                        self._on_unknown(crop, face)
-                    event_logger.log_event("INTRUSION_FACE", "Unknown face detected", "CRITICAL")
+                if self._unknown_start_time == 0:
+                    self._unknown_start_time = now
+                
+                # Only alert if seen unknown for at least 3.0 seconds (grace period)
+                if (now - self._unknown_start_time) >= 3.0:
+                    if now - self._last_alert_time >= Config.ALERT_COOLDOWN_SECONDS:
+                        self._last_alert_time = now
+                        if self._on_unknown:
+                            self._on_unknown(crop, face)
+                        event_logger.log_event("INTRUSION_FACE", "Unknown face detected", "CRITICAL")
             else:
-                if self._on_known:
-                    self._on_known(name, crop)
+                self._unknown_start_time = 0  # Reset on successful identification
+                
+                # Throttle logging: only log "identified" once every 5 seconds
+                if now - self._last_log_time.get(name, 0) >= 5.0:
+                    self._last_log_time[name] = now
+                    if self._on_known:
+                        self._on_known(name, crop)
+                    event_logger.log_event("FACE_KNOWN", f"Identified: {name}", "INFO")
         except Exception as e:
             logger.warning(f"Async recognition error: {e}")
             with self._recognizing_lock:
@@ -281,6 +334,9 @@ class CameraMonitor:
             if not ret:
                 time.sleep(0.1)
                 continue
+
+            with self._frame_lock:
+                self._latest_raw_frame = frame.copy()
 
             faces = self._detector.detect(frame)
             annotated = frame.copy()

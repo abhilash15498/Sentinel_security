@@ -41,16 +41,8 @@ class AlarmService:
             logger.warning(f"Pygame not available: {e}")
 
     def _init_tts(self) -> None:
-        if not Config.TTS_ENABLED:
-            return
-        try:
-            import pyttsx3
-            self._tts_engine = pyttsx3.init()
-            self._tts_engine.setProperty("rate", 160)
-            self._tts_engine.setProperty("volume", 1.0)
-            logger.info("TTS engine initialized.")
-        except Exception as e:
-            logger.warning(f"TTS not available: {e}")
+        # TTS will be initialized on-demand in its own thread to avoid COM apartment issues on Windows
+        pass
 
     # ─── Sound ────────────────────────────────────────────────
 
@@ -103,13 +95,20 @@ class AlarmService:
 
     def speak(self, message: str) -> None:
         """Speak a message using TTS in a background thread."""
-        if not self._tts_engine:
+        if not Config.TTS_ENABLED:
             return
 
         def _speak():
             try:
-                self._tts_engine.say(message)
-                self._tts_engine.runAndWait()
+                import pyttsx3
+                # Initialize in-thread for Windows compatibility
+                engine = pyttsx3.init()
+                engine.setProperty("rate", 160)
+                engine.setProperty("volume", 1.0)
+                engine.say(message)
+                engine.runAndWait()
+                # Clean up
+                del engine
             except Exception as e:
                 logger.warning(f"TTS speak failed: {e}")
 

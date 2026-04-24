@@ -36,6 +36,7 @@ class Config:
 
     FACE_RECOGNITION_MODE: str = os.getenv("FACE_RECOGNITION_MODE", "deepface")
     ALERT_COOLDOWN_SECONDS: int = int(os.getenv("ALERT_COOLDOWN_SECONDS", "30"))
+    FACE_CONFIDENCE_THRESHOLD: float = float(os.getenv("FACE_CONFIDENCE_THRESHOLD", "0.6"))
 
     # ─── Features ─────────────────────────────────────────────
     SCREENSHOT_ON_INTRUSION: bool = (

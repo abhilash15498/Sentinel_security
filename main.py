@@ -15,6 +15,10 @@ from pathlib import Path
 # ─── Ensure project root is on path ───────────────────────────
 sys.path.insert(0, str(Path(__file__).parent))
 
+# ─── Silence noisy libraries before they are imported ──────────
+from utils.suppress import silence_the_beasts
+silence_the_beasts()
+
 from utils.config import Config
 from utils.logger import get_logger, event_logger
 

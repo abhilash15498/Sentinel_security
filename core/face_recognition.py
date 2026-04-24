@@ -300,7 +300,6 @@ class CameraMonitor:
             name, conf = self._recognizer.recognize(crop)
             with self._recognizing_lock:
                 self._last_face_info = (name, conf)
-                self._is_recognizing = False
                 
             now = time.time()
             if name == "UNKNOWN":
@@ -317,14 +316,16 @@ class CameraMonitor:
             else:
                 self._unknown_start_time = 0  # Reset on successful identification
                 
-                # Throttle logging: only log "identified" once every 5 seconds
-                if now - self._last_log_time.get(name, 0) >= 5.0:
+                # Throttle logging: only log "identified" once every 30 seconds to the console
+                # but keep the 5s logic for event logs if needed (here we just use 30s for both to be clean)
+                if now - self._last_log_time.get(name, 0) >= 30.0:
                     self._last_log_time[name] = now
                     if self._on_known:
                         self._on_known(name, crop)
                     event_logger.log_event("FACE_KNOWN", f"Identified: {name}", "INFO")
         except Exception as e:
             logger.warning(f"Async recognition error: {e}")
+        finally:
             with self._recognizing_lock:
                 self._is_recognizing = False
 

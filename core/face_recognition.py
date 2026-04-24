@@ -11,6 +11,7 @@ import threading
 import time
 from pathlib import Path
 from datetime import datetime
+import pickle
 from typing import Callable
 
 from utils.config import Config
@@ -71,7 +72,8 @@ class FaceRecognizer:
 
     def __init__(self) -> None:
         self._known_faces_dir = Config.KNOWN_FACES_DIR
-        self._known_embeddings: list[dict] = []  # [{name, embedding}]
+        self._cache_file = Config.MODELS_DIR / "embeddings_cache.pkl"
+        self._known_embeddings: list[dict] = []  # [{name, embedding, path, mtime}]
         self._deepface_available = False
         self._mode = Config.FACE_RECOGNITION_MODE
         self._init_recognizer()
@@ -99,51 +101,114 @@ class FaceRecognizer:
         path = save_dir / f"{timestamp}.jpg"
         cv2.imwrite(str(path), frame)
         logger.info(f"Enrolled face for '{name}': {path.name}")
+        
         if reload:
             event_logger.log_event("ENROLLMENT", f"Enrolled: {name}", "INFO")
-            self.load_known_faces()
+            # Instead of full reload, just process the new face
+            self._process_single_image(path, name)
+            self._save_cache()
+            
         return True
 
     def load_known_faces(self) -> None:
-        """Scan known_faces directory and cache embeddings AND histograms as backup."""
-        self._known_embeddings = []
-        logger.info("Loading face database...")
+        """Scan known_faces directory and load/update cached embeddings."""
+        logger.info("Initializing face database...")
+        start_time = time.time()
         
+        # 1. Try to load existing cache
+        cached_data = self._load_cache()
+        
+        # 2. Map cache for quick lookup: {path_str: entry}
+        cache_map = {str(e["path"]): e for e in cached_data if "path" in e}
+        new_embeddings = []
+        updated = False
+        
+        # 3. Scan directory and update
         for person_dir in self._known_faces_dir.iterdir():
             if not person_dir.is_dir(): continue
             name = person_dir.name
+            
             for img_path in person_dir.glob("*.jpg"):
-                entry = {"name": name, "path": img_path}
+                path_str = str(img_path)
+                mtime = img_path.stat().st_mtime
                 
-                # Always cache histogram as a bulletproof backup
-                try:
-                    img = cv2.imread(str(img_path))
-                    if img is not None:
-                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                        hist = cv2.equalizeHist(cv2.resize(gray, (100, 100)))
-                        entry["hist"] = cv2.calcHist([hist], [0], None, [256], [0, 256])
-                        cv2.normalize(entry["hist"], entry["hist"])
-                except Exception:
-                    pass
+                # Check if we have a valid cache entry
+                if path_str in cache_map and cache_map[path_str].get("mtime") == mtime:
+                    new_embeddings.append(cache_map[path_str])
+                else:
+                    # New or modified image
+                    logger.debug(f"Processing new/modified face: {img_path.name}")
+                    entry = self._process_single_image(img_path, name)
+                    if entry:
+                        new_embeddings.append(entry)
+                        updated = True
 
-                # Try to cache DeepFace embedding if available
-                if self._deepface_available and self._mode == "deepface":
-                    try:
-                        from deepface import DeepFace
-                        objs = DeepFace.represent(
-                            img_path=str(img_path),
-                            model_name="Facenet512",
-                            detector_backend="skip",
-                            enforce_detection=False,
-                        )
-                        if objs:
-                            entry["embedding"] = objs[0]["embedding"]
-                    except Exception:
-                        pass # Will use histogram fallback during recognize()
-                
-                self._known_embeddings.append(entry)
-                
-        logger.info(f"Loaded {len(self._known_embeddings)} face samples.")
+        self._known_embeddings = new_embeddings
+        
+        # 4. Save cache if updated
+        if updated or len(cached_data) != len(new_embeddings):
+            self._save_cache()
+            
+        elapsed = time.time() - start_time
+        logger.info(f"Loaded {len(self._known_embeddings)} face samples in {elapsed:.2f}s.")
+
+    def _process_single_image(self, img_path: Path, name: str) -> dict | None:
+        """Extract features from a single image and return entry."""
+        entry = {
+            "name": name, 
+            "path": img_path, 
+            "mtime": img_path.stat().st_mtime
+        }
+        
+        # Calculate Histogram (Backup)
+        try:
+            img = cv2.imread(str(img_path))
+            if img is not None:
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                hist = cv2.equalizeHist(cv2.resize(gray, (100, 100)))
+                entry["hist"] = cv2.calcHist([hist], [0], None, [256], [0, 256])
+                cv2.normalize(entry["hist"], entry["hist"])
+        except Exception as e:
+            logger.warning(f"Failed to generate histogram for {img_path}: {e}")
+
+        # Calculate DeepFace embedding
+        if self._deepface_available and self._mode == "deepface":
+            try:
+                from deepface import DeepFace
+                objs = DeepFace.represent(
+                    img_path=str(img_path),
+                    model_name="Facenet512",
+                    detector_backend="skip",
+                    enforce_detection=False,
+                )
+                if objs:
+                    entry["embedding"] = objs[0]["embedding"]
+            except Exception as e:
+                logger.warning(f"DeepFace failed for {img_path}: {e}")
+        
+        # If it's a completely new enrollment being added to memory
+        if hasattr(self, "_known_embeddings") and entry not in self._known_embeddings:
+            self._known_embeddings.append(entry)
+            
+        return entry
+
+    def _load_cache(self) -> list[dict]:
+        if not self._cache_file.exists():
+            return []
+        try:
+            with open(self._cache_file, "rb") as f:
+                return pickle.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to load embedding cache: {e}")
+            return []
+
+    def _save_cache(self) -> None:
+        try:
+            with open(self._cache_file, "wb") as f:
+                pickle.dump(self._known_embeddings, f)
+            logger.debug("Embedding cache saved to disk.")
+        except Exception as e:
+            logger.error(f"Failed to save embedding cache: {e}")
 
     # ─── Recognition ──────────────────────────────────────────
 
